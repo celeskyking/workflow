@@ -240,13 +240,13 @@ func TestGetPodListFromResources(t *testing.T) {
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
-			pods, err := GetPodListFromResources(ctx, cli, tc.resources)
+			pods, err := GetPodListFromResources(ctx, nil, cli, tc.resources)
 			if tc.expectedErr != "" {
 				r.Contains(err.Error(), tc.expectedErr)
 				return
 			}
 			r.NoError(err)
-			r.Equal(tc.expected, pods[0].Name)
+			r.Equal(tc.expected, pods[0].Pod.Name)
 		})
 	}
 }

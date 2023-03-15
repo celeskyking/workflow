@@ -14,6 +14,7 @@ require (
 	github.com/hashicorp/go-version v1.6.0
 	github.com/kubevela/kube-trigger v0.0.1-alpha.2.0.20230206040152-1f8885e6d9b4
 	github.com/kubevela/pkg v0.0.0-20230206074514-7c05c32743e8
+	github.com/oam-dev/cluster-gateway v1.7.0-alpha.1
 	github.com/oam-dev/kubevela v1.7.2
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.20.2
@@ -157,7 +158,6 @@ require (
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
 	github.com/nacos-group/nacos-sdk-go/v2 v2.1.0 // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
-	github.com/oam-dev/cluster-gateway v1.7.0-alpha.1 // indirect
 	github.com/oam-dev/cluster-register v1.0.4-0.20220928064144-5f76a9d7ca8c // indirect
 	github.com/oam-dev/terraform-config-inspect v0.0.0-20210418082552-fc72d929aa28 // indirect
 	github.com/oam-dev/terraform-controller v0.7.8 // indirect

@@ -18,6 +18,7 @@ package types
 
 import (
 	"context"
+	corev1 "k8s.io/api/core/v1"
 
 	"cuelang.org/go/cue"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -184,6 +185,11 @@ type Parameter struct {
 	JSONType string      `json:"jsonType,omitempty"`
 }
 
+type Pod struct {
+	Pod     corev1.Pod `json:"pod"`
+	Cluster string     `json:"cluster"`
+}
+
 // Resource is the log resources
 type Resource struct {
 	Name          string            `json:"name,omitempty"`
@@ -202,6 +208,13 @@ type LogSource struct {
 type LogConfig struct {
 	Data   bool       `json:"data,omitempty"`
 	Source *LogSource `json:"source,omitempty"`
+	Loki   *Loki      `json:"loki,omitempty"`
+}
+
+type Loki struct {
+	HostAndPort string            `json:"url"`
+	TenantID    string            `json:"tenantId,omitempty"`
+	Labels      map[string]string `json:"labels"`
 }
 
 const (

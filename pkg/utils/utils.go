@@ -20,18 +20,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-
 	"github.com/kubevela/pkg/multicluster"
+	"github.com/oam-dev/cluster-gateway/pkg/apis/cluster/v1alpha1"
+	clusterv1alpha1 "github.com/oam-dev/cluster-gateway/pkg/generated/clientset/versioned/typed/cluster/v1alpha1"
+	"io"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"net/http"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"strings"
 
 	wfContext "github.com/kubevela/workflow/pkg/context"
 	"github.com/kubevela/workflow/pkg/cue/model/value"
-	"github.com/kubevela/workflow/pkg/types"
+	workflowtypes "github.com/kubevela/workflow/pkg/types"
 )
 
 // GetDataFromContext get data from workflow context
@@ -51,13 +54,13 @@ func GetDataFromContext(ctx context.Context, cli client.Client, ctxName, name, n
 }
 
 // GetLogConfigFromStep get log config from step
-func GetLogConfigFromStep(ctx context.Context, cli client.Client, ctxName, name, ns, step string) (*types.LogConfig, error) {
+func GetLogConfigFromStep(ctx context.Context, cli client.Client, ctxName, name, ns, step string) (*workflowtypes.LogConfig, error) {
 	wfCtx, err := wfContext.LoadContext(cli, ns, name, ctxName)
 	if err != nil {
 		return nil, err
 	}
-	config := make(map[string]types.LogConfig)
-	c := wfCtx.GetMutableValue(types.ContextKeyLogConfig)
+	config := make(map[string]workflowtypes.LogConfig)
+	c := wfCtx.GetMutableValue(workflowtypes.ContextKeyLogConfig)
 	if c == "" {
 		return nil, fmt.Errorf("no log config found")
 	}
@@ -74,9 +77,19 @@ func GetLogConfigFromStep(ctx context.Context, cli client.Client, ctxName, name,
 }
 
 // GetPodListFromResources get pod list from resources
-func GetPodListFromResources(ctx context.Context, cli client.Client, resources []types.Resource) ([]corev1.Pod, error) {
-	pods := make([]corev1.Pod, 0)
+func GetPodListFromResources(ctx context.Context, clusterGatewayClient clusterv1alpha1.ClusterV1alpha1Interface, cli client.Client, resources []workflowtypes.Resource) ([]workflowtypes.Pod, error) {
+	pods := make([]workflowtypes.Pod, 0)
 	for _, resource := range resources {
+		var clusterClient client.Client
+		if resource.Cluster == "" || clusterGatewayClient == nil {
+			clusterClient = cli
+		} else {
+			cc, err := clusterGatewayClient.ClusterGateways().GetControllerRuntimeClient(resource.Cluster, client.Options{})
+			if err != nil {
+				return nil, err
+			}
+			clusterClient = cc
+		}
 		cliCtx := multicluster.WithCluster(ctx, resource.Cluster)
 		if resource.LabelSelector != nil {
 			labels := &metav1.LabelSelector{
@@ -87,24 +100,32 @@ func GetPodListFromResources(ctx context.Context, cli client.Client, resources [
 				return nil, err
 			}
 			var podList corev1.PodList
-			err = cli.List(cliCtx, &podList, &client.ListOptions{
+			err = clusterClient.List(cliCtx, &podList, &client.ListOptions{
 				LabelSelector: selector,
 			})
 			if err != nil {
 				return nil, err
 			}
-			pods = append(pods, podList.Items...)
+			for _, p := range podList.Items {
+				pods = append(pods, workflowtypes.Pod{
+					Pod:     p,
+					Cluster: resource.Cluster,
+				})
+			}
 			continue
 		}
 		if resource.Namespace == "" {
 			resource.Namespace = metav1.NamespaceDefault
 		}
 		var pod corev1.Pod
-		err := cli.Get(cliCtx, client.ObjectKey{Namespace: resource.Namespace, Name: resource.Name}, &pod)
+		err := clusterClient.Get(cliCtx, client.ObjectKey{Namespace: resource.Namespace, Name: resource.Name}, &pod)
 		if err != nil {
 			return nil, err
 		}
-		pods = append(pods, pod)
+		pods = append(pods, workflowtypes.Pod{
+			Pod:     pod,
+			Cluster: resource.Cluster,
+		})
 	}
 	if len(pods) == 0 {
 		return nil, fmt.Errorf("no pod found")
@@ -125,13 +146,80 @@ func GetLogsFromURL(ctx context.Context, url string) (io.ReadCloser, error) {
 	return resp.Body, nil
 }
 
+// GetLogsFromLoki get logs from url
+func GetLogsFromLoki(ctx context.Context, lokiCfg workflowtypes.Loki) ([]string, error) {
+	url := fmt.Sprintf("http://%s/loki/api/v1/query")
+	var kvs []string
+	for k, v := range lokiCfg.Labels {
+		kvs = append(kvs, fmt.Sprintf("%s=%s", k, v))
+	}
+	queryText := fmt.Sprintf(`{%s} | json log | line_format "{{.log}}" `, strings.Join(kvs, " "))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.URL.Query().Add("query", queryText)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var response QueryLokiResponse
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(data, &response)
+	if err != nil {
+		return nil, err
+	}
+	var logs []string
+	if response.Data.ResultType == "streams" {
+		for _, line := range response.Data.Result {
+			logs = append(logs, line.values[1])
+		}
+	}
+	return nil, nil
+}
+
 // GetLogsFromPod get logs from pod
 func GetLogsFromPod(ctx context.Context, clientSet kubernetes.Interface, cli client.Client, podName, ns, cluster string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
 	cliCtx := multicluster.WithCluster(ctx, cluster)
-	req := clientSet.CoreV1().Pods(ns).GetLogs(podName, opts)
+	var clustergateway v1alpha1.ClusterGateway
+	err := cli.Get(cliCtx, types.NamespacedName{Name: cluster}, &clustergateway)
+	if err != nil {
+		return nil, err
+	}
+	restCfg, err := v1alpha1.NewConfigFromCluster(cliCtx, &clustergateway)
+	if err != nil {
+		return nil, err
+	}
+	restCfg.Insecure = true
+	restCfg.CAData = nil
+	restCfg.CAFile = ""
+	cs, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return nil, err
+	}
+	req := cs.CoreV1().Pods(ns).GetLogs(podName, opts)
 	readCloser, err := req.Stream(cliCtx)
 	if err != nil {
 		return nil, err
 	}
 	return readCloser, nil
+}
+
+type QueryLokiResponse struct {
+	Status string              `json:"status"`
+	Data   QueryLokiResultData `json:"data"`
+}
+
+type QueryLokiResultData struct {
+	ResultType string            `json:"resultType"`
+	Result     []QueryLokiResult `json:"result"`
+}
+
+type QueryLokiResult struct {
+	stream map[string]string `json:"stream"`
+	values []string          `json:"values"`
 }
