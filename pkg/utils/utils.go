@@ -80,11 +80,14 @@ func GetPodListFromResources(ctx context.Context, cli client.Client, resources [
 	pods := make([]workflowtypes.Pod, 0)
 	for _, resource := range resources {
 		var clusterClient client.Client
-		if resource.Cluster == "" {
+		if resource.Cluster == "" || resource.Cluster == "local" {
 			clusterClient = cli
 		} else {
 			clusterGateway := &v1alpha1.ClusterGateway{}
-			cli.Get(ctx, types.NamespacedName{Name: resource.Cluster}, clusterGateway)
+			err := cli.Get(ctx, types.NamespacedName{Name: resource.Cluster}, clusterGateway)
+			if err != nil {
+				return nil, err
+			}
 			restCfg, err := v1alpha1.NewConfigFromCluster(ctx, clusterGateway)
 			if err != nil {
 				return nil, err
@@ -118,19 +121,24 @@ func GetPodListFromResources(ctx context.Context, cli client.Client, resources [
 				})
 			}
 			continue
+		} else {
+			if resource.Name == "" {
+				continue
+			}
+			if resource.Namespace == "" {
+				resource.Namespace = metav1.NamespaceDefault
+			}
+			var pod corev1.Pod
+			err := clusterClient.Get(cliCtx, client.ObjectKey{Namespace: resource.Namespace, Name: resource.Name}, &pod)
+			if err != nil {
+				return nil, err
+			}
+			pods = append(pods, workflowtypes.Pod{
+				Pod:     pod,
+				Cluster: resource.Cluster,
+			})
 		}
-		if resource.Namespace == "" {
-			resource.Namespace = metav1.NamespaceDefault
-		}
-		var pod corev1.Pod
-		err := clusterClient.Get(cliCtx, client.ObjectKey{Namespace: resource.Namespace, Name: resource.Name}, &pod)
-		if err != nil {
-			return nil, err
-		}
-		pods = append(pods, workflowtypes.Pod{
-			Pod:     pod,
-			Cluster: resource.Cluster,
-		})
+
 	}
 	if len(pods) == 0 {
 		return nil, fmt.Errorf("no pod found")
