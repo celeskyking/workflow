@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"github.com/kubevela/pkg/multicluster"
 	"github.com/oam-dev/cluster-gateway/pkg/apis/cluster/v1alpha1"
-	clusterv1alpha1 "github.com/oam-dev/cluster-gateway/pkg/generated/clientset/versioned/typed/cluster/v1alpha1"
 	"io"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -77,14 +76,20 @@ func GetLogConfigFromStep(ctx context.Context, cli client.Client, ctxName, name,
 }
 
 // GetPodListFromResources get pod list from resources
-func GetPodListFromResources(ctx context.Context, clusterGatewayClient clusterv1alpha1.ClusterV1alpha1Interface, cli client.Client, resources []workflowtypes.Resource) ([]workflowtypes.Pod, error) {
+func GetPodListFromResources(ctx context.Context, cli client.Client, resources []workflowtypes.Resource) ([]workflowtypes.Pod, error) {
 	pods := make([]workflowtypes.Pod, 0)
 	for _, resource := range resources {
 		var clusterClient client.Client
-		if resource.Cluster == "" || clusterGatewayClient == nil {
+		if resource.Cluster == "" {
 			clusterClient = cli
 		} else {
-			cc, err := clusterGatewayClient.ClusterGateways().GetControllerRuntimeClient(resource.Cluster, client.Options{})
+			clusterGateway := &v1alpha1.ClusterGateway{}
+			cli.Get(ctx, types.NamespacedName{Name: resource.Cluster}, clusterGateway)
+			restCfg, err := v1alpha1.NewConfigFromCluster(ctx, clusterGateway)
+			if err != nil {
+				return nil, err
+			}
+			cc, err := client.New(restCfg, client.Options{})
 			if err != nil {
 				return nil, err
 			}
